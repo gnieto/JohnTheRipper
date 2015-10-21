@@ -54,10 +54,10 @@ static void get_longest_common_string(char *fstr, char *sstr, int *first_index,
 	int *second_index, int *size);
 static void test_fmt_8_bit(struct fmt_main *format, void *binary,
 	char *ciphertext, char *plaintext, int *is_ignore_8th_bit,
-	int *plaintext_is_blank);
+	int *plaintext_is_blank, struct db_main *db);
 static void test_fmt_case(struct fmt_main *format, void *binary,
 	char *ciphertext, char* plaintext, int *is_case_sensitive,
-	int *plaintext_has_alpha);
+	int *plaintext_has_alpha, struct db_main *db);
 
 void fmt_register(struct fmt_main *format)
 {
@@ -195,7 +195,8 @@ static char *longcand(struct fmt_main *format, int index, int ml)
 }
 
 static char* is_key_right(struct fmt_main *format, int index,
-	void *binary, char *ciphertext, char *plaintext, int is_test_fmt_case)
+	void *binary, char *ciphertext, char *plaintext,
+	int is_test_fmt_case, struct db_main *db)
 {
 	static char err_buf[100];
 	int i, size, count, match, len;
@@ -205,9 +206,10 @@ static char* is_key_right(struct fmt_main *format, int index,
 		return "index should be 0 when test_fmt_case";
 
 	count = index + 1;
-	match = format->methods.crypt_all(&count, NULL);
+	match = format->methods.crypt_all(&count, db->salts);
 
-	if (!format->methods.cmp_all(binary, match)) {
+	if ((match && !format->methods.cmp_all(binary, match)) ||
+	    (!match && format->methods.cmp_all(binary, match))) {
 		sprintf(err_buf, "cmp_all(%d)", match);
 		return err_buf;
 	}
@@ -758,7 +760,7 @@ static char *fmt_self_test_body(struct fmt_main *format,
 			advance_cursor();
 #endif
 			/* 2. Perform a limited crypt (in case it matters) */
-			if (format->methods.crypt_all(&min, NULL) != min)
+			if (format->methods.crypt_all(&min, db->salts) != min)
 				return "crypt_all";
 #endif
 #if defined(HAVE_OPENCL) || defined(HAVE_CUDA)
@@ -792,13 +794,13 @@ static char *fmt_self_test_body(struct fmt_main *format,
 			// Test FMT_CASE
 			format->methods.clear_keys();
 			test_fmt_case(format, binary, ciphertext, plaintext,
-				&is_case_sensitive, &plaintext_has_alpha);
+				&is_case_sensitive, &plaintext_has_alpha, db);
 
 			// Test FMT_8_BIT
 			format->methods.clear_keys();
 			format->methods.set_salt(salt);
 			test_fmt_8_bit(format, binary, ciphertext, plaintext,
-				&is_ignore_8th_bit, &plaintext_is_blank);
+				&is_ignore_8th_bit, &plaintext_is_blank, db);
 
 			format->methods.clear_keys();
 			format->methods.set_salt(salt);
@@ -816,14 +818,14 @@ static char *fmt_self_test_body(struct fmt_main *format,
 		advance_cursor();
 #endif
 		if (full_lvl >= 0) {
-			ret = is_key_right(format, max - 1, binary, ciphertext, plaintext, 0);
+			ret = is_key_right(format, max - 1, binary, ciphertext, plaintext, 0, db);
 			if (ret)
 				return ret;
 			format->methods.clear_keys();
 			dyna_salt_remove(salt);
 			while_condition = (++current)->ciphertext != NULL;
 		} else {
-		ret = is_key_right(format, index, binary, ciphertext, plaintext, 0);
+			ret = is_key_right(format, index, binary, ciphertext, plaintext, 0, db);
 		if (ret)
 			return ret;
 
@@ -1008,7 +1010,7 @@ static char *fmt_self_test_body(struct fmt_main *format,
 
 static void test_fmt_case(struct fmt_main *format, void *binary,
 	char *ciphertext, char* plaintext, int *is_case_sensitive,
-	int *plaintext_has_alpha)
+	int *plaintext_has_alpha, struct db_main *db)
 {
 	char *plain_copy, *pk;
 
@@ -1034,7 +1036,7 @@ static void test_fmt_case(struct fmt_main *format, void *binary,
 	*plaintext_has_alpha = 1;
 	fmt_set_key(plain_copy, 0);
 
-	if (is_key_right(format, 0, binary, ciphertext, plain_copy, 1))
+	if (is_key_right(format, 0, binary, ciphertext, plain_copy, 1, db))
 		*is_case_sensitive = 1;
 
 out:
@@ -1043,7 +1045,7 @@ out:
 
 static void test_fmt_8_bit(struct fmt_main *format, void *binary,
 	char *ciphertext, char *plaintext, int *is_ignore_8th_bit,
-	int *plaintext_is_blank)
+	int *plaintext_is_blank, struct db_main *db)
 {
 	char *plain_copy, *pk, *ret_all_set, *ret_none_set;
 
@@ -1061,7 +1063,8 @@ static void test_fmt_8_bit(struct fmt_main *format, void *binary,
 	}
 
 	fmt_set_key(plain_copy, 0);
-	ret_all_set = is_key_right(format, 0, binary, ciphertext, plain_copy, 0);
+	ret_all_set = is_key_right(format, 0, binary, ciphertext,
+	                           plain_copy, 0, db);
 
 	format->methods.clear_keys();
 
@@ -1073,7 +1076,8 @@ static void test_fmt_8_bit(struct fmt_main *format, void *binary,
 	}
 
 	fmt_set_key(plain_copy, 0);
-	ret_none_set = is_key_right(format, 0, binary, ciphertext, plain_copy, 0);
+	ret_none_set = is_key_right(format, 0, binary, ciphertext,
+	                            plain_copy, 0, db);
 
 	if (ret_all_set != ret_none_set)
 		*is_ignore_8th_bit = 0;

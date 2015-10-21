@@ -199,6 +199,7 @@ char *benchmark_format(struct fmt_main *format, int salts,
 	unsigned int t_cost[2][FMT_TUNABLE_COSTS];
 	int ntests, pruned;
 #endif
+	struct db_main *test_db;
 	int salts_done = 0;
 	int wait = 0;
 
@@ -249,15 +250,20 @@ char *benchmark_format(struct fmt_main *format, int salts,
 #endif
 	if (!(current = format->params.tests) || !current->ciphertext)
 		return "FAILED (no data)";
-	if ((where = fmt_self_test(format, NULL))) {
+	test_db = ldr_init_fake_db(format);
+	if ((where = fmt_self_test(format, test_db))) {
+		ldr_free_fake_db(test_db);
 		sprintf(s_error, "FAILED (%s)\n", where);
 		return s_error;
 	}
-	if (!current->ciphertext)
+	if (!current->ciphertext) {
+		ldr_free_fake_db(test_db);
 		return "FAILED (no ciphertext in test vector)";
-	if (!current->plaintext)
+	}
+	if (!current->plaintext) {
+		ldr_free_fake_db(test_db);
 		return "FAILED (no plaintext in test vector)";
-
+	}
 	if (format->params.binary_size > binary_size) {
 		binary_size = format->params.binary_size;
 		binary = mem_alloc_tiny(binary_size, MEM_ALIGN_SIMD);
@@ -410,7 +416,7 @@ char *benchmark_format(struct fmt_main *format, int salts,
 
 		if (salts > 1) format->methods.set_salt(two_salts[index & 1]);
 		format->methods.cmp_all(binary,
-		    format->methods.crypt_all(&count, NULL));
+		    format->methods.crypt_all(&count, test_db->salts));
 
 		add32to64(&crypts, count);
 #if !OS_TIMER
@@ -459,6 +465,8 @@ char *benchmark_format(struct fmt_main *format, int salts,
 
 	if (pw_mangled)
 		format->params.benchmark_length -= 1000;
+
+	ldr_free_fake_db(test_db);
 
 	return event_abort ? "" : NULL;
 }
