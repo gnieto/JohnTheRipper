@@ -66,6 +66,7 @@ int platform_id;
 int default_gpu_selected;
 int ocl_autotune_running;
 size_t ocl_max_lws;
+unsigned int cl_cache_index;
 
 static char opencl_log[LOG_SIZE];
 static int opencl_initialized;
@@ -357,6 +358,19 @@ static int get_if_device_is_in_use(int sequential_id)
 	return found;
 }
 
+static unsigned int start_cl_cache()
+{
+	cl_cache_index = cl_cache_create_fs("/tmp/jtr");
+
+#ifdef OCL_DEBUG
+	if (!cl_cache_index) {
+		fprintf(stderr, "Could not initialize OpenCL cache on /tmp/jtr");
+	}
+#endif
+
+	return cl_cache_index;
+}
+
 static void start_opencl_environment()
 {
 	cl_platform_id platform_list[MAX_PLATFORMS];
@@ -392,11 +406,12 @@ static void start_opencl_environment()
 	// Set NULL to the final buffer position.
 	platforms[i].platform = NULL;
 	devices[device_pos] = NULL;
+
+	start_cl_cache();
 }
 
 static cl_int get_pci_info(int sequential_id, hw_bus *hardware_info)
 {
-
 	cl_int ret;
 
 	hardware_info->bus = -1;
@@ -441,6 +456,7 @@ static cl_int get_pci_info(int sequential_id, hw_bus *hardware_info)
 
 	sprintf(hardware_info->busId, "%02x:%02x.%x", hardware_info->bus,
 	        hardware_info->device, hardware_info->function);
+
 	return CL_SUCCESS;
 }
 
@@ -1814,73 +1830,32 @@ void opencl_build_kernel_opt(char *kernel_filename, int sequential_id,
 void opencl_build_kernel(char *kernel_filename, int sequential_id, char *opts,
                          int warn)
 {
-	struct stat source_stat, bin_stat;
-	char dev_name[512], bin_name[512];
-	unsigned char hash[16];
-	char hash_str[33];
-	uint64_t startTime, runtime;
+	struct stat source_stat;
+	char dev_name[512];
 
 	if ((!gpu_amd(device_info[sequential_id]) &&
 	        !platform_apple(platform_id)) ||
-	        stat(path_expand(kernel_filename), &source_stat))
+	        stat(path_expand(kernel_filename), &source_stat)) {
 		opencl_build_kernel_opt(kernel_filename, sequential_id, opts);
+	}
 	else {
-		int i;
-		MD5_CTX ctx;
 		char *kernel_source = NULL;
-
-		startTime = (unsigned long)time(NULL);
-
 		// Get device name.
 		HANDLE_CLERROR(clGetDeviceInfo(devices[sequential_id],
 		                               CL_DEVICE_NAME, sizeof(dev_name),
 		                               dev_name, NULL), "Error querying DEVICE_NAME");
-
-/*
- * Create a hash of kernel source and paramters, and use as cache name.
- */
-		MD5_Init(&ctx);
-		md5add(kernel_filename);
+    char *build_opts = include_source("$JOHN/kernels", sequential_id, opts);
 		opencl_read_source(kernel_filename, &kernel_source);
-		md5add(kernel_source);
-		if (opts)
-			md5add(opts);
-		md5add(opencl_driver_ver(sequential_id));
-		md5add(dev_name);
-		MD5_Update(&ctx, (char*)&platform_id, sizeof(platform_id));
-		MD5_Final(hash, &ctx);
+		program[sequential_id] = cl_cache_get_with_options(
+			cl_cache_index,
+			kernel_source,
+			1,
+			&devices[sequential_id],
+			context[sequential_id],
+			build_opts
+		);
 
-		for (i = 0; i < 16; i++) {
-			hash_str[2 * i + 0] = itoa16[hash[i] >> 4];
-			hash_str[2 * i + 1] = itoa16[hash[i] & 0xf];
-		}
-		hash_str[32] = 0;
-
-		snprintf(bin_name, sizeof(bin_name), "%s_%s.bin",
-		         kernel_filename, hash_str);
-
-		// Select the kernel to run.
-		if (!getenv("DUMP_BINARY") && !stat(path_expand(bin_name), &bin_stat) &&
-			(source_stat.st_mtime < bin_stat.st_mtime)) {
-			size_t program_size = opencl_read_source(bin_name, &kernel_source);
-			opencl_build_from_binary(sequential_id, &program[sequential_id], kernel_source, program_size);
-		} else {
-			if (warn && options.verbosity > 2) {
-				fprintf(stderr, "Building the kernel, this "
-				        "could take a while\n");
-				fflush(stdout);
-			}
-			opencl_read_source(kernel_filename, &kernel_source);
-			opencl_build(sequential_id, opts, 1, bin_name, &program[sequential_id], kernel_filename, kernel_source);
-		}
-		if (warn && options.verbosity > 2) {
-			if ((runtime = (unsigned long)(time(NULL) - startTime))
-			        > 2UL)
-				fprintf(stderr, "Build time: %lu seconds\n",
-				        (unsigned long)runtime);
-			fflush(stdout);
-		}
-
+    MEM_FREE(build_opts);
 		MEM_FREE(kernel_source);
 	}
 }

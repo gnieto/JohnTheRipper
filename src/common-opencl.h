@@ -32,6 +32,7 @@
 #include "path.h"
 #include "stdint.h"
 #include "opencl_device_info.h"
+#include "cl_cache.h"
 
 #define MAX_PLATFORMS   8
 #define MAX_EVENTS      0x3f
